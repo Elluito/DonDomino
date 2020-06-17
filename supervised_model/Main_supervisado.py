@@ -1,4 +1,3 @@
-
 import numpy as np
 import pickle
 import tensorflow as tf
@@ -6,17 +5,22 @@ import tensorflow.keras.layers as l
 import matplotlib.pyplot as plt
 # import tensorflow_addons as ta
 from sklearn.model_selection import train_test_split
-print(tf.__version__)
-fileName = 'DATA.h5'
+
+DEBUG = False
+
+if DEBUG : print(tf.__version__)
+fileName = './supervised_model/DATA.h5'
 with open(fileName, 'rb') as r:
     DATA = pickle.load(r)
 
 STATES, ACTIONS = DATA['s'], DATA['a']
-print(f'# States {len(STATES)} # Actions {len(ACTIONS)}')
-gpus = tf.config.experimental.list_physical_devices('GPU')
-print(gpus)
+if DEBUG : print(f'# States {len(STATES)} # Actions {len(ACTIONS)}')
+
+gpus = False
+# gpus = tf.config.experimental.list_physical_devices('GPU')
+# print(gpus)
 # capacity=3000
-if gpus:
+if gpus :
     try:
         # Currently, memory growth needs to be the same across GPUs
         for gpu in gpus:
@@ -43,6 +47,7 @@ def gelu(x):
   cdf = 0.5 * (1.0 + tf.tanh(
       (np.sqrt(2 / np.pi) * (x + 0.044715 * tf.pow(x, 3)))))
   return x * cdf
+
 def build_model(input_shape,type="conv"):
     layers=[]
     if type=="conv":
@@ -75,11 +80,8 @@ def build_model(input_shape,type="conv"):
 
     model.compile(optimizer=tf.keras.optimizers.Adam(lr=0.005),loss=tf.keras.losses.CategoricalCrossentropy(),metrics=[tf.keras.metrics.CategoricalAccuracy()])
     # model.build(input_shape=input_shape)
-    model.summary()
+    if DEBUG : model.summary()
     return model
-
-
-
 
 def arreglar_datos(x_pre,y_pre,mode=1):
     x_pos=[]
@@ -95,6 +97,7 @@ def arreglar_datos(x_pre,y_pre,mode=1):
             x_pos.append(np.array(temp_x))
         y_pos.append(np.array(y_pre[i]).ravel())
     return np.array(x_pos,dtype=np.int32),np.array(y_pos,dtype=np.int32)
+
 def grad(model, inputs, targets):
   with tf.GradientTape() as tape:
     loss_value1,y1 = loss(model, inputs, targets, training=True)
@@ -103,15 +106,18 @@ def grad(model, inputs, targets):
 def crear_batch(x,y,batch_size):
     index = np.random.choice(range(len(x)),batch_size)
     return x[index,:],y[index,:]
+
 def loss(model, x, y, training):
     loss_object1 = tf.keras.losses.CategoricalCrossentropy()
     y_pred = model(x,training)
     return loss_object1(y_true=y,y_pred=y_pred)
+
 def evaluate_model(model,X,Y):
     n=len(Y)
     y_pred = model.predict(X)
     acuraccy_obej = tf.keras.metrics.CategoricalAccuracy()
     print("Accuracy in {} samples of test : {}".format(n,acuraccy_obej(Y,y_pred)))
+
 def train_model(model,X,Y,log_name,model_name,batch_size=32,step_per_epoch=10,epochs=10):
     optimizer = tf.keras.optimizers.Adadelta(learning_rate=0.001)
     # train_dataset =tf.data.Dataset.from_tensor_slices((X,Y)).batch(batch_size=batch_size).repeat().shuffle(1000)
@@ -126,26 +132,16 @@ def train_model(model,X,Y,log_name,model_name,batch_size=32,step_per_epoch=10,ep
 
         for i in range(step_per_epoch):
             x,y = crear_batch(X,Y,batch_size)
-
-
             loss_value1, grads,y1 = grad(model, x, y)
-
-
             optimizer.apply_gradients(zip(grads, model.trainable_variables))
-
 
             # Track progress
             epoch_loss_avg1(loss_value1)  # Add current batch loss
             # Compare predicted label to actual label
-
             epoch_accuracy(y,y1)
-
             # print("Log_end: " + str(y2.numpy()))
         if epoch%10 == 0:
             model.save(model_name)
-
-
-
         # End epoch
         # train_loss_results.append(epoch_loss_avg.result())
         # train_accuracy_results_start.append(epoch_accuracy_start.result())
@@ -158,62 +154,62 @@ def train_model(model,X,Y,log_name,model_name,batch_size=32,step_per_epoch=10,ep
         f.write("Epoch {:03d}: Loss start : {:.3f}, Accuracyt: {:.3%} ".format(epoch,epoch_loss_avg1.result(),epoch_accuracy.result()))
         # f.write("Log_end: " + str(y2.numpy()))
         f.close()
-x,y = arreglar_datos(STATES,ACTIONS,mode=1)
-bad_index = np.where(np.max(y,axis=1)== 0)
-x=np.delete(x,bad_index,0)
-y=np.delete(y,bad_index,0)
-X_train,X_test,y_train,y_test = train_test_split(x,y,test_size=0.2)
-model = build_model((x[0].shape[0],x[0].shape[1],),type="fc")
+
+def train():
+    x,y = arreglar_datos(STATES,ACTIONS,mode=1)
+    bad_index = np.where(np.max(y,axis=1)== 0)
+    x=np.delete(x,bad_index,0)
+    y=np.delete(y,bad_index,0)
+    X_train,X_test,y_train,y_test = train_test_split(x,y,test_size=0.2)
+    model = build_model((x[0].shape[0],x[0].shape[1],),type="fc")
 
 
-#Callbacks
+    #Callbacks
 
-model_callback = tf.keras.callbacks.ModelCheckpoint("models/DOMINATOR_e{epoch}-val_loss_{val_loss:.4f}.hdf5",save_best_only=True)
-reduce_learning = tf.keras.callbacks.ReduceLROnPlateau(
-    monitor='val_loss', factor=0.1, patience=5, verbose=1, mode='auto',
-    min_delta=0.0001, cooldown=0, min_lr=1e-8)
-early_callback = tf.keras.callbacks.EarlyStopping(
-    monitor="val_loss", patience = 15, verbose=1, mode='auto', restore_best_weights=True)
+    model_callback = tf.keras.callbacks.ModelCheckpoint("models/DOMINATOR_e{epoch}-val_loss_{val_loss:.4f}.hdf5",save_best_only=True)
+    reduce_learning = tf.keras.callbacks.ReduceLROnPlateau(
+        monitor='val_loss', factor=0.1, patience=5, verbose=1, mode='auto',
+        min_delta=0.0001, cooldown=0, min_lr=1e-8)
+    early_callback = tf.keras.callbacks.EarlyStopping(
+        monitor="val_loss", patience = 15, verbose=1, mode='auto', restore_best_weights=True)
 
-import datetime
-t = datetime.datetime.now().time()
-log_name = "Entrenamiento_{}.txt".format(t)
-# train_model(model,X_train,y_train,log_name,"DOMINATOR.hdf5",step_per_epoch=20,epochs=100)
-#
-
-
-
-history = model.fit(X_train,y_train,batch_size=64,epochs=1000,verbose=2,callbacks=[model_callback,reduce_learning,early_callback],validation_split=0.1)
-# model.load_weights("models/DOMINATOR_e19-val_loss_2.6855.hdf5")
-cosas = model.evaluate(X_test,y_test,verbose=1)
-print(cosas)
-y_pred = model.predict(X_test)
+    import datetime
+    t = datetime.datetime.now().time()
+    log_name = "Entrenamiento_{}.txt".format(t)
+    # train_model(model,X_train,y_train,log_name,"DOMINATOR.hdf5",step_per_epoch=20,epochs=100)
+    #
 
 
-with open("y_pred","w+b")as f:
-    pickle.dump(y_pred,f)
-with open("y_true","w+b")as f:
-    pickle.dump(y_test,f)
-with open("x","w+b")as f:
-    pickle.dump(X_test,f)
-indexes = np.random.randint(0,len(y_test),4)
 
-for i in indexes:
-    real = y_test[i,:].reshape(7,7)
-    predicted = y_pred[i,:].reshape(7,7)
-    plt.figure()
-    ax = plt.subplot(1,2,1)
-    ax.set_title("y real")
-    ax.matshow(real)
-    ax = plt.subplot(1,2,2)
-    ax.set_title("y predicho")
-    ax.matshow(predicted)
-
-    plt.savefig("comparación_{}.png".format(i))
-print("Accuracy en test: {}".format(tf.keras.metrics.CategoricalAccuracy()(y_test,y_pred)))
+    history = model.fit(X_train,y_train,batch_size=64,epochs=1000,verbose=2,callbacks=[model_callback,reduce_learning,early_callback],validation_split=0.1)
+    # model.load_weights("models/DOMINATOR_e19-val_loss_2.6855.hdf5")
+    cosas = model.evaluate(X_test,y_test,verbose=1)
+    print(cosas)
+    y_pred = model.predict(X_test)
 
 
-#
-# loss_ = history.history["loss"]
-# val_loss = history.history["val_loss"]
+    with open("y_pred","w+b")as f:
+        pickle.dump(y_pred,f)
+    with open("y_true","w+b")as f:
+        pickle.dump(y_test,f)
+    with open("x","w+b")as f:
+        pickle.dump(X_test,f)
+    indexes = np.random.randint(0,len(y_test),4)
+
+    for i in indexes:
+        real = y_test[i,:].reshape(7,7)
+        predicted = y_pred[i,:].reshape(7,7)
+        plt.figure()
+        ax = plt.subplot(1,2,1)
+        ax.set_title("y real")
+        ax.matshow(real)
+        ax = plt.subplot(1,2,2)
+        ax.set_title("y predicho")
+        ax.matshow(predicted)
+
+        plt.savefig("comparación_{}.png".format(i))
+    print("Accuracy en test: {}".format(tf.keras.metrics.CategoricalAccuracy()(y_test,y_pred)))
+
+    # loss_ = history.history["loss"]
+    # val_loss = history.history["val_loss"]
 
