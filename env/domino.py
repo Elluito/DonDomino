@@ -5,9 +5,27 @@ from trueskill import Rating, rate
 from enum import Enum
 import numpy as np
 import tensorflow as tf
+import tensorflow.keras as keras
 from supervised_model.Main_supervisado import build_model
-
+from collections import namedtuple
+Transition = namedtuple('Transition',
+                        ('state', 'action', 'reward'))
 DEBUG = False
+gpus = tf.config.experimental.list_physical_devices('GPU')
+# print(gpus)
+# capacity=3000
+if gpus :
+    try:
+        # Currently, memory growth needs to be the same across GPUs
+        for gpu in gpus:
+            print("\n\nENTRE EN LAS GPUS IN PUSE SET MEMORY GROWTH TRUE")
+            tf.config.experimental.set_memory_growth(gpu, True)
+            # tf.config.experimental.set_virtual_device_configuration(gpus[0],[tf.config.experimental.VirtualDeviceConfiguration(memory_limit=capacity*0.8)])
+        logical_gpus = tf.config.experimental.list_logical_devices('GPU')
+        print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
+    except RuntimeError as e:
+        # Memory growth must be set before GPUs have been initialized
+        print(e)
 
 class Bone :
     IDX = [[0, 1, 2, 3, 4, 5, 6],
@@ -44,10 +62,12 @@ class Bone :
 class PlayerType(Enum) :
     RANDOM = 0
     IMITATION = 1
+    POLICY = 2
 
     def __str__(self):
         if self == PlayerType.RANDOM : return 'Random Player'
         if self == PlayerType.IMITATION: return 'Imitation Bot Player'
+        if self == PlayerType.POLICY: return 'Policy with imitation Bot Player initialization'
 
 class Player:
     def __init__(self, id: int, nMax: int, nTotalBones: int, typeAgent):
@@ -72,9 +92,8 @@ class Player:
         self.state.extend( ZEROS() )
         self.state.extend( ZEROS() )
         self.state.extend( plays )
-
         self.model = build_model((91, 1,),type="fc")
-        self.model.load_weights("./models/DOMINATOR_e31-val_loss_2.2780.hdf5")
+        self.model.load_weights("../models/DOMINATOR_e31-val_loss_2.2780.hdf5")
 
 
     def __str__(self):
@@ -128,16 +147,20 @@ class Player:
         self.bones.append( bone )
         self.initialBones.append(bone)
 
-    def play(self, board):
+    def play(self, board,policy):
         if self.typeAgent == PlayerType.RANDOM :  return self.playRandom(board)
         if self.typeAgent == PlayerType.IMITATION:  return self.playImitation(board)
+        if self.typeAgent == PlayerType.POLICY: return self.playPolicy(board,policy)
 
     def playRandom(self, board):
         if not board :
             bone = Bone( self.nMax, self.nMax )
             self.bones.remove(bone)
             board.append(bone)
-            return board, bone, len(self.bones) == 0, bone is None
+            action = np.zeros((7, 7))
+            action[6, 6] = 1
+            action = action.ravel()
+            return board, bone, len(self.bones) == 0, bone is None, action
 
         bone = None
         nJug1, nJug2 = board[0].n1, board[-1].n2
@@ -160,15 +183,27 @@ class Player:
                     board = board + [bone]
                 else:
                     board = board + [bone.inv()]
+        if bone:
+            action = np.zeros((7,7))
+            action[bone.n1,bone.n2] = 1
+            action = action.ravel()
+            return board, bone, len(self.bones) == 0, bone is None,action
+        else:
+            action = np.zeros((7, 7))
+            action = action.ravel()
+            return board, bone, len(self.bones) == 0, bone is None, action
 
-        return board, bone, len(self.bones) == 0, bone is None
+
 
     def playImitation(self,board):
         if not board :
             bone = Bone( self.nMax, self.nMax )
             self.bones.remove(bone)
             board.append(bone)
-            return board, bone, len(self.bones) == 0, bone is None
+            action = np.zeros((7,7))
+            action[6,6] = 1
+            action = action.ravel()
+            return board, bone, len(self.bones) == 0, bone is None,action
 
         n1, n2 = board[0].n1, board[-1].n2
 
@@ -191,6 +226,9 @@ class Player:
         output = output * mask1 * mask2
         maxV = np.amax( output )
         idxMax = np.where( output == maxV )
+        action = np.zeros((7,7))
+        action[idxMax]= 1
+        action = action.ravel()
         idxMax = list(zip(idxMax[0],idxMax[1]))[0]
 
         if maxV == 0 :
@@ -201,7 +239,208 @@ class Player:
             if idxMax[0] == n1 : board = [bone.inv()] + board
             else : board = board + [bone]
 
-        return board, bone, len(self.bones) == 0, bone is None
+        return board, bone, len(self.bones) == 0, bone is None,action
+
+
+    def playPolicy(self,board,policy):
+        if not board :
+            bone = Bone( self.nMax, self.nMax )
+            self.bones.remove(bone)
+            board.append(bone)
+            action = np.zeros((7, 7))
+            action[6, 6] = 1
+            action = action.ravel()
+            return board, bone, len(self.bones) == 0, bone is None, action
+
+
+        n1, n2 = board[0].n1, board[-1].n2
+
+        observation = np.array( (self.state) )
+        observation = observation.reshape(1,91,1)
+        output = policy.model.predict(observation)
+        output = output.reshape(7, 7)
+
+        # Mask
+        mask1 = np.zeros((7,7), dtype = int)
+        for b in self.bones :
+            mask1[b.n1, b.n2] = 1
+            mask1[b.n2, b.n1] = 1
+
+        mask2 = np.zeros((7,7), dtype = int)
+        for i in range(self.nMax+1) :
+            mask2[n1, i] = 1
+            mask2[n2, i] = 1
+
+        output = output * mask1 * mask2
+        a=0
+        while a == 0 and np.any(output)!=0:
+            a = np.random.choice(output.ravel())
+            temp_idx = np.nonzero(output.ravel())
+            temp_x = output.ravel()[temp_idx]
+            a = np.random.choice(temp_x, p=tf.nn.softmax(temp_x))
+
+        idxMax = np.where(output == a)
+        action = np.zeros((7,7))
+        action[idxMax] = 1
+        action = action.ravel()
+        idxMax = list(zip(idxMax[0],idxMax[1]))[0]
+
+        if a == 0 :
+            bone = None
+        else :
+            bone = Bone( idxMax[0], idxMax[1] )
+            self.bones.remove(bone)
+            if idxMax[0] == n1 : board = [bone.inv()] + board
+            else : board = board + [bone]
+
+        return board, bone, len(self.bones) == 0, bone is None,action
+
+class ReplayMemory(object):
+
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.memory = []
+        self.position = 0
+
+    def push(self, *args):
+        """Saves a transition."""
+        if len(self.memory) < self.capacity:
+            self.memory.append(None)
+        self.memory[self.position] = Transition(*args)
+        self.position = (self.position + 1) % self.capacity
+
+    def sample(self, batch_size):
+        return np.random.sample(self.memory, batch_size)
+
+    def __len__(self):
+        return len(self.memory)
+class Policy:
+    # __slots__ = ( 'width', 'height', 'dim_action', 'gamma','load_name','use_prior','use_image','model','memory','epsilon','escala','mapeo','state_space','priority','priority_memory','action_space')
+
+    def __init__(self, gamma=0.99, load_name=None,use_prior =False,use_image =False):
+        # tf.enable_eager_execution()
+
+
+        # tf.logging.set_verbosity(tf.logging.ERROR)
+        self.priority = use_prior
+
+        self.use_image = use_image
+        self.gamma = gamma
+
+
+        self.model = build_model((91,1,),mode="sup")
+        self.model.summary()
+        # self.model.load_weights("../models/DOMINATOR_e31-val_loss_2.2780.hdf5")
+        self.optimizer = tf.keras.optimizers.Adam(lr=0.0001)
+            # self.model.compile(loss=tf.compat.v1.losses.huber_loss, optimizer=tf.keras.optimizers.RMSprop(learning_rate=0.0002,momentum=0.01))
+
+
+        if load_name is not None: self.model = keras.models.load_model(load_name)
+
+
+
+
+
+
+        # Episode policy and reward history
+
+    # @tf.function
+    def func(self,y_true, y_pred):
+        errors = tf.pow(tf.reduce_sum(y_true- y_pred, axis=1), 2)
+        print(self.pesos)
+
+        loss = tf.reduce_mean(tf.multiply(self.pesos, errors))
+        return loss
+
+    def load_Model(self, load_name=None):
+        self.model = keras.models.load_model(load_name)
+
+
+    def saveModel(self, name):
+
+        self.model.save('../models/' + name + '.h5')
+
+
+
+    # @tf.function
+    def update_policy(self,states,rewards,actions):
+        if not self.priority:
+                network = self.model
+                reward_sum = 0
+                discounted_rewards = []
+                for reward in rewards[::-1]:  # reverse buffer r
+                    reward_sum = reward + self.gamma * reward_sum
+                    discounted_rewards.append(reward_sum)
+                discounted_rewards.reverse()
+                discounted_rewards = np.array(discounted_rewards)
+                # standardise the rewards
+                discounted_rewards -= np.mean(discounted_rewards)
+                discounted_rewards /= np.std(discounted_rewards)+1e-9
+                states = np.vstack(states)
+                actions = np.vstack(actions)
+                with  tf.GradientTape() as tape:
+                    y_pred = network(states,training=True)
+                    out = keras.backend.clip(y_pred,1e-8,1-1e-8)
+                    log_like = actions*keras.backend.log(out)
+                    advantages = tf.constant(discounted_rewards.reshape(-1,1),dtype=tf.float32)
+                    loss = tf.keras.backend.sum(-log_like*advantages)
+
+                gradients = tape.gradient([loss], network.trainable_variables)
+                del tape
+                self.optimizer.apply_gradients(zip(gradients, network.trainable_variables))
+                # loss = network.train_on_batch(states, discounted_rewards)
+                print("Loss: {}".format(loss.numpy()))
+
+
+
+
+
+        else:
+            if len(self.priority_memory) < BATCH_SIZE:
+                return
+            obs_batch, act_batch, rew_batch, next_obs_batch, not_done_mask, weights, indxes = self.priority_memory.sample(BATCH_SIZE,0.5)
+            self.pesos = np.array(weights,dtype=np.float32)
+            non_final_mask = np.where(not_done_mask==0)[0]
+            act_batch = np.array([list(range(len(act_batch))), act_batch]).transpose()
+            next_state_values = np.zeros([BATCH_SIZE], dtype=float)
+            next_state_values[non_final_mask] = np.max(self.model.predict(next_obs_batch[non_final_mask]), axis=1)
+
+            rew_batch = (rew_batch - np.mean(rew_batch)) / (np.std(rew_batch) + 0.001)
+            # rew_batch = rew_batch/max(np.abs(rew_batch))
+
+            q_update = (rew_batch + self.gamma * next_state_values)
+            q_values = np.array(self.model.predict([obs_batch]))
+            q_values[act_batch[:, 0], act_batch[:, 1]] = q_update
+
+            with tf.GradientTape() as tape:
+                # tape.watch(self.model.trainable_variables)
+                y_pred = self.model([obs_batch],training=True)
+
+
+                errors = tf.pow(tf.reduce_sum(q_values-y_pred,axis=1),2)
+
+                loss = tf.reduce_mean(tf.multiply(weights,errors))
+                loss = tf.reduce_mean(errors)
+
+            grads = tape.gradient(loss, self.model.trainable_variables)
+            del tape
+
+            # grads = self.optimizer.compute_gradients(f,self.model.trainable_variables)
+
+
+            # for i,elem in enumerate(grads):
+            #     grads[i] =elem[1].numpy()
+
+            self.optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
+
+
+
+            # salidas = self.model.fit(obs_batch, q_values, batch_size=len(q_values), epochs=20, verbose=0)
+            # print(salidas.history["loss"])
+            td_error = self.model.predict([obs_batch])[act_batch[:, 0], act_batch[:, 1]]-q_update
+            self.priority_memory.update_priorities(indxes, abs(td_error))
+    def add_transition(self,*args):
+        self.episodic_memory.append(Transition(*args))
 
 
 class Game:
@@ -212,11 +451,13 @@ class Game:
         self.nJug = nJug
 
         nBones = int(self.nTotalBones() / nJug)
-        types = [1,0,0,0]
+        types = [0,2,0,0]
         self.players = [ Player(i, nMax, self.totalBones, types[i]) for i in range(nJug) ]
 
         self.board = []
         self.bones = []
+        self.policy = Policy()
+        self.transitions = [[] for _ in range(nJug)]
 
 
     def nTotalBones(self) -> int:
@@ -266,15 +507,54 @@ class Game:
 
         while not ended :
             # board, bone, len(self.bones) == 0, bone is None
-            self.board, bone, ended, playerPass = self.players[idx].play( self.board )
+            self.board, bone, ended, playerPass,action = self.players[idx].play( self.board,self.policy)
 
             move = 'x' if playerPass else bone
+
+
+
+
             for p in self.players : p.update( self.board, idx, move )
 
             if playerPass: nPass += 1
             else: nPass = 0
 
-            if nPass == self.nJug: ended = True
+            if nPass == self.nJug:
+                ended = True
+                #Esto es para que el update de cuando estan
+                s0 = np.sum([b.sum() for b in self.players[0].bones])
+                s1 = np.sum([b.sum() for b in self.players[1].bones])
+                s2 = np.sum([b.sum() for b in self.players[2].bones])
+                s3 = np.sum([b.sum() for b in self.players[3].bones])
+                idx = np.argmin([s0, s1, s2, s3])
+                observation = np.array((self.players[idx].state))
+                observation = observation.reshape(1, 91, 1)
+                self.transitions[idx].append(Transition(observation, action, 1))
+                for i in range(self.nJug):
+
+                    if i != idx and len(self.transitions[i]) != 0:
+                        state = self.transitions[i][-1].state
+                        action = self.transitions[i][-1].action
+                        reward = -1
+                        self.transitions[i][-1] = Transition(state, action, reward)
+
+
+            if move != 'x' and not ended:
+                observation = np.array((self.players[idx].state))
+                observation = observation.reshape(1, 91, 1)
+                self.transitions[idx].append(Transition(observation, action, 0))
+
+            if move!='x' and ended:
+                observation = np.array((self.players[idx].state))
+                observation = observation.reshape(1, 91, 1)
+                self.transitions[idx].append(Transition(observation,action,1))
+                for i in range(self.nJug):
+
+                    if i!= idx and len(self.transitions[i])!=0 :
+                        state = self.transitions[i][-1].state
+                        action = self.transitions[i][-1].action
+                        reward=-1
+                        self.transitions[i][-1] = Transition(state, action, reward)
 
             if DEBUG:
                 if playerPass : print(f'Turn {k:d}: The Player {idx:d} pass')
@@ -286,9 +566,19 @@ class Game:
             k += 1
             idx += 1
             idx %= self.nJug
-
+        for trans in self.transitions:
+            if trans:
+                batch = Transition(*zip(*trans))
+                states = batch.state
+                actions = batch.action
+                rewards = batch.reward
+                self.policy.update_policy(states,rewards,actions)
+        self.transitions=[[] for _ in range(self.nJug)]
         idx = (idx - 1) % self.nJug
         locked = True
+
+
+
         if nPass < self.nJug :
             print(f'\tPlayer {idx:d} wins!!!!')
 
@@ -319,16 +609,20 @@ class Game:
 
 
 game = Game(6,4)
-nGames = 2500
+nGames = 3000
+
 wins = [0,0,0,0]
 winsL = [0,0,0,0]
 
 for i in range(nGames) :
     print(f'Game {(i+1):d}')
     idxWin, locked = game.play()
+
     if locked : winsL[idxWin] += 1
     else: wins[idxWin] += 1
     for p in game.players : print( '\t' + p.printMMR() )
 
-print()
+    if i%100==0:
+        game.policy.saveModel("modelo")
+
 for i,(w,l) in enumerate( zip(wins,winsL) ) : print(f'Player {i:d} wins {w:d} games and wins {l:d} locked games. Total wins: {w+l:d}')

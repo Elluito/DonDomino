@@ -9,7 +9,7 @@ from sklearn.model_selection import train_test_split
 DEBUG = False
 
 if DEBUG : print(tf.__version__)
-fileName = './supervised_model/DATA.h5'
+fileName = '../supervised_model/DATA.h5'
 with open(fileName, 'rb') as r:
     DATA = pickle.load(r)
 
@@ -17,7 +17,7 @@ STATES, ACTIONS = DATA['s'], DATA['a']
 if DEBUG : print(f'# States {len(STATES)} # Actions {len(ACTIONS)}')
 
 gpus = False
-# gpus = tf.config.experimental.list_physical_devices('GPU')
+gpus = tf.config.experimental.list_physical_devices('GPU')
 # print(gpus)
 # capacity=3000
 if gpus :
@@ -48,16 +48,32 @@ def gelu(x):
       (np.sqrt(2 / np.pi) * (x + 0.044715 * tf.pow(x, 3)))))
   return x * cdf
 
-def build_model(input_shape,type="conv"):
-    layers=[]
-    if type=="conv":
+def build_model(input_shape,type="conv",mode="sup"):
+    layers = []
+    if type == "conv":
         layers = [l.Conv1D(32,10,activation=gelu,strides=1,padding="same",input_shape= input_shape),
               l.Dropout(0.5),
               # ta.layers.Maxout(32),
-            l.Conv1D(64,10,activation=gelu,strides=5),
+            l.Conv1D(64,10,activation=gelu,padding="same",strides=1),
             l.BatchNormalization(),
             l.Dropout(0.5),
-            l.LocallyConnected1D(128,5,activation=gelu),
+            l.LocallyConnected1D(128, 1, activation=gelu, padding="same", implementation=2),
+            l.BatchNormalization(),
+            l.Conv1D(32, 10, activation=gelu, strides=1, padding="same", input_shape=input_shape),
+            l.Dropout(0.5),
+            # ta.layers.Maxout(32),
+            l.Conv1D(64, 10, activation=gelu, padding="same", strides=5),
+            l.BatchNormalization(),
+            l.Dropout(0.5),
+            l.LocallyConnected1D(128, 1, activation=gelu, padding="same",implementation=2),
+            l.Conv1D(32, 10, activation=gelu, strides=1, padding="same", input_shape=input_shape),
+            l.Dropout(0.5),
+          # ta.layers.Maxout(32),
+            l.Conv1D(64, 10, activation=gelu, padding="same", strides=1),
+            l.BatchNormalization(),
+            l.Dropout(0.5),
+            l.LocallyConnected1D(128, 5, activation=gelu, padding="same", implementation=2),
+            l.BatchNormalization(),
             l.BatchNormalization(),
             l.Flatten(),
             l.Dropout(0.4),
@@ -77,9 +93,11 @@ def build_model(input_shape,type="conv"):
         ]
 
     model = tf.keras.Sequential(layers)
+    if mode=="sup":
+        model.compile(optimizer=tf.keras.optimizers.Adam(lr=0.005),loss='categorical_crossentropy',metrics=[tf.keras.metrics.CategoricalAccuracy()])
 
-    model.compile(optimizer=tf.keras.optimizers.Adam(lr=0.005),loss=tf.keras.losses.CategoricalCrossentropy(),metrics=[tf.keras.metrics.CategoricalAccuracy()])
-    # model.build(input_shape=input_shape)
+    else:
+        model.build(input_shape=input_shape)
     if DEBUG : model.summary()
     return model
 
