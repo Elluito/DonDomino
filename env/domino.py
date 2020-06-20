@@ -609,7 +609,7 @@ class Game:
 
 
 game = Game(6,4)
-nGames = 3000
+nGames = 3000000
 
 wins = [0,0,0,0]
 winsL = [0,0,0,0]
