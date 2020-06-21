@@ -353,12 +353,12 @@ class Policy:
         return loss
 
     def load_Model(self, load_name=None):
-        self.model = keras.models.load_model(load_name)
+        self.model.load_weights(load_name)
 
 
     def saveModel(self, name):
 
-        self.model.save('../models/' + name + '.h5')
+        self.model.save_weights('../models/' + name + '.hdf5')
 
 
 
@@ -609,11 +609,11 @@ class Game:
 
 
 game = Game(6,4)
-nGames = 3000000
+nGames = 100
 
 wins = [0,0,0,0]
 winsL = [0,0,0,0]
-
+game.policy.load_Model("../models/modelo.h5")
 for i in range(nGames) :
     print(f'Game {(i+1):d}')
     idxWin, locked = game.play()
